@@ -47,6 +47,8 @@ class RegisterRequest(BaseModel):
     password: str
 
 
+
+
 class TokenResponse(BaseModel):
     access_token: str
     token_type: str = "bearer"
@@ -122,6 +124,11 @@ async def on_shutdown():
 @app.get("/", tags=["health"])
 async def read_root():
             return {"status": "ok", "service": "AI Schedule Manage"}
+
+
+# include schedules router (moved to schedules.py)
+from .schedules import router as schedules_router
+app.include_router(schedules_router, prefix="/schedules")
 
 if __name__ == "__main__":
     uvicorn.run("main:app", host="0.0.0.0", port=8000, reload=True)

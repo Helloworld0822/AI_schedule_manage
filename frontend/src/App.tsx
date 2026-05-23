@@ -1,18 +1,38 @@
 import { useMemo, useState } from 'react'
-import reactLogo from './assets/react.svg'
-import viteLogo from './assets/vite.svg'
 import heroImg from './assets/hero.png'
 import './App.css'
 
 type Schedule = {
   id: string
-  date: string // ISO date yyyy-mm-dd
+  // start and end are local datetime-local strings, e.g. "2026-05-23T09:00"
+  start: string
+  end: string
   title: string
   description?: string
+  category: 'appointment' | 'competition' | 'schedule'
+}
+
+type ScheduleApi = {
+  id: number | string
+  start: string
+  end: string
+  title: string
+  description?: string | null
+  category?: Schedule['category']
 }
 
 function formatDateISO(d: Date) {
   return d.toISOString().slice(0, 10)
+}
+
+function formatTimeLocal(dtLocal?: string) {
+  if (!dtLocal) return ''
+  // dtLocal expected in local "YYYY-MM-DDTHH:MM" or ISO; create Date and format hh:mm
+  const date = new Date(dtLocal)
+  if (isNaN(date.getTime())) return dtLocal.slice(11, 16)
+  const hh = String(date.getHours()).padStart(2, '0')
+  const mm = String(date.getMinutes()).padStart(2, '0')
+  return `${hh}:${mm}`
 }
 
 function buildMonthGrid(year: number, month: number) {
@@ -45,32 +65,77 @@ function App() {
   const [selectedDate, setSelectedDate] = useState<string | null>(formatDateISO(today))
   const [modalOpen, setModalOpen] = useState(false)
   const [schedules, setSchedules] = useState<Schedule[]>([])
+  // load schedules from backend
+  useMemo(() => {
+    fetch('/schedules')
+      .then((r) => r.ok ? r.json() : Promise.resolve([]))
+      .then((data: ScheduleApi[]) => {
+        // convert backend items (start/end ISO) to frontend Schedule shape
+        setSchedules(data.map((d) => ({
+          id: String(d.id),
+          start: d.start,
+          end: d.end,
+          title: d.title,
+          description: d.description ?? undefined,
+          category: d.category ?? 'appointment',
+        })))
+      })
+      .catch(() => {})
+  }, [])
   const [title, setTitle] = useState('')
   const [description, setDescription] = useState('')
+  const [startLocal, setStartLocal] = useState('')
+  const [endLocal, setEndLocal] = useState('')
+  const [category, setCategory] = useState<Schedule['category']>('appointment')
 
   const monthGrid = useMemo(() => buildMonthGrid(viewYear, viewMonth), [viewYear, viewMonth])
 
   function openAddModal(dateIso?: string) {
-    setSelectedDate(dateIso ?? formatDateISO(new Date(viewYear, viewMonth, 1)))
+    const date = dateIso ?? formatDateISO(new Date(viewYear, viewMonth, 1))
+    // default times: 09:00 - 10:00 local
+    const defaultStart = `${date}T09:00`
+    const defaultEnd = `${date}T10:00`
+    setSelectedDate(date)
     setTitle('')
     setDescription('')
+    setStartLocal(defaultStart)
+    setEndLocal(defaultEnd)
+    setCategory('appointment')
     setModalOpen(true)
   }
 
   function saveSchedule() {
-    if (!selectedDate) return
-    const newItem: Schedule = {
-      id: Math.random().toString(36).slice(2, 9),
-      date: selectedDate,
-      title: title || 'Untitled',
-      description: description || undefined,
+    if (!startLocal || !endLocal) return
+    // basic validation
+    if (new Date(endLocal) <= new Date(startLocal)) {
+      alert('종료 시간은 시작 시간보다 이후여야 합니다.')
+      return
     }
-    setSchedules((s) => [...s, newItem])
-    setModalOpen(false)
+    const payload = { start: startLocal, end: endLocal, title: title || 'Untitled', description: description || undefined, category }
+    fetch('/schedules', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(payload) })
+      .then((r) => {
+        if (!r.ok) return r.json().then((j) => Promise.reject(j))
+        return r.json()
+      })
+      .then((saved) => {
+        const savedItem: Schedule = { id: String(saved.id), start: saved.start, end: saved.end, title: saved.title, description: saved.description, category: saved.category }
+        setSchedules((s) => [...s, savedItem])
+        setModalOpen(false)
+      })
+      .catch((err) => {
+        alert('저장 중 오류가 발생했습니다: ' + (err?.detail || err))
+      })
   }
 
   function eventsFor(dateIso: string) {
-    return schedules.filter((s) => s.date === dateIso)
+    // return events that overlap the date (local date)
+    const dayStart = new Date(dateIso + 'T00:00:00')
+    const dayEnd = new Date(dateIso + 'T23:59:59.999')
+    return schedules.filter((ev) => {
+      const evStart = new Date(ev.start)
+      const evEnd = new Date(ev.end)
+      return evStart <= dayEnd && evEnd >= dayStart
+    })
   }
 
   function prevMonth() {
@@ -87,7 +152,6 @@ function App() {
   }
 
   function connectGoogle() {
-    // Placeholder: do not guess OAuth URLs here. Replace with real flow later.
     alert('Google Calendar integration not implemented. Provide OAuth flow URL to complete this action.')
   }
   function connectMicrosoft() {
@@ -138,7 +202,9 @@ function App() {
                             </div>
                             <div style={{ marginTop: 6 }}>
                               {events.slice(0, 2).map((e) => (
-                                <div key={e.id} style={{ background: '#eef', padding: '2px 4px', borderRadius: 4, marginBottom: 4, fontSize: 12, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{e.title}</div>
+                                <div key={e.id} style={{ background: '#eef', padding: '2px 4px', borderRadius: 4, marginBottom: 4, fontSize: 12, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+                                  <strong style={{ marginRight: 6 }}>{formatTimeLocal(e.start)}</strong>{e.title} <em style={{ marginLeft: 6, fontSize: 11 }}>{e.category === 'appointment' ? '약속' : e.category === 'competition' ? '대회' : '스케줄'}</em>
+                                </div>
                               ))}
                               {events.length > 2 && <div style={{ fontSize: 11, color: '#666' }}>+{events.length - 2} more</div>}
                             </div>
@@ -166,6 +232,7 @@ function App() {
                     eventsFor(selectedDate).map((e) => (
                       <div key={e.id} style={{ padding: 8, borderBottom: '1px solid #f6f6f6' }}>
                         <div style={{ fontWeight: 600 }}>{e.title}</div>
+                        <div style={{ fontSize: 13 }}>{formatTimeLocal(e.start)} — {formatTimeLocal(e.end)} <span style={{ marginLeft: 8, color: '#666' }}>{e.category === 'appointment' ? '약속' : e.category === 'competition' ? '대회' : '스케줄'}</span></div>
                         {e.description && <div style={{ fontSize: 13 }}>{e.description}</div>}
                       </div>
                     ))
@@ -184,15 +251,27 @@ function App() {
 
       {modalOpen && (
         <div style={{ position: 'fixed', inset: 0, background: 'rgba(0,0,0,0.3)', display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
-          <div style={{ background: 'white', padding: 18, width: 420, borderRadius: 8 }}>
+          <div style={{ background: 'white', padding: 18, width: 460, borderRadius: 8 }}>
             <h3 style={{ marginTop: 0 }}>Add schedule</h3>
             <div style={{ marginBottom: 8 }}>
-              <label style={{ display: 'block', fontSize: 13 }}>Date</label>
-              <input type="date" value={selectedDate ?? ''} onChange={(e) => setSelectedDate(e.target.value)} />
+              <label style={{ display: 'block', fontSize: 13 }}>Start</label>
+              <input type="datetime-local" value={startLocal} onChange={(e) => setStartLocal(e.target.value)} style={{ width: '100%' }} />
+            </div>
+            <div style={{ marginBottom: 8 }}>
+              <label style={{ display: 'block', fontSize: 13 }}>End</label>
+              <input type="datetime-local" value={endLocal} onChange={(e) => setEndLocal(e.target.value)} style={{ width: '100%' }} />
             </div>
             <div style={{ marginBottom: 8 }}>
               <label style={{ display: 'block', fontSize: 13 }}>Title</label>
               <input value={title} onChange={(e) => setTitle(e.target.value)} style={{ width: '100%' }} />
+            </div>
+            <div style={{ marginBottom: 8 }}>
+              <label style={{ display: 'block', fontSize: 13 }}>Category</label>
+              <select value={category} onChange={(e) => setCategory(e.target.value as Schedule['category'])}>
+                <option value="appointment">약속</option>
+                <option value="competition">대회</option>
+                <option value="schedule">스케줄</option>
+              </select>
             </div>
             <div style={{ marginBottom: 8 }}>
               <label style={{ display: 'block', fontSize: 13 }}>Description</label>
